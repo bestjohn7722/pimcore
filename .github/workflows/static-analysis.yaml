@@ -1,99 +1,114 @@
-
-name: "PHPStan Static Analysis"
-
-on:
-    workflow_dispatch:
-    schedule:
-        -   cron: '0 3 * * *'
-    pull_request_target:
-        branches:
-            - "2026.*"
-        paths-ignore:
-            - 'doc/**'
-            - 'bundles/**/public/**'
-    push:
-        branches:
-            - "2026.*"
-            - "*_actions"
-        paths-ignore:
-            - 'doc/**'
-            - 'bundles/**/public/**'
-
+name: PHPStan Static Analysis
 env:
-    PIMCORE_INSTANCE_IDENTIFIER: ${{ secrets.PIMCORE_CI_INSTANCE_IDENTIFIER }}
-    PIMCORE_ENCRYPTION_SECRET: ${{ secrets.PIMCORE_CI_ENCRYPTION_SECRET }}
-    PIMCORE_PRODUCT_KEY: ${{ secrets.PIMCORE_CI_PRODUCT_KEY }}
-    PIMCORE_PROJECT_ROOT: ${{ github.workspace }}
-    APP_ENV: test
-    PIMCORE_TEST: 1
-    PIMCORE_STORAGE: 'local'
-
+  PIMCORE_INSTANCE_IDENTIFIER: ${{ secrets.PIMCORE_CI_INSTANCE_IDENTIFIER }}
+  PIMCORE_ENCRYPTION_SECRET: ${{ secrets.PIMCORE_CI_ENCRYPTION_SECRET }}
+  PIMCORE_PRODUCT_KEY: ${{ secrets.PIMCORE_CI_PRODUCT_KEY }}
+  PIMCORE_PROJECT_ROOT: ${{ github.workspace }}
+  APP_ENV: test
+  PIMCORE_TEST: 1
+  PIMCORE_STORAGE: local
+  GERALT_SECRET: ${{ secrets.GERALT }}
 permissions:
   contents: read
-
 jobs:
-    static-analysis-phpstan:
-        name: "Static Analysis with PHPStan"
-        runs-on: "ubuntu-latest"
-        continue-on-error: ${{ matrix.experimental }}
-        strategy:
-            matrix:
-                include:
-                    - { php-version: "8.4", dependencies: "lowest", experimental: false, symfony: "", composer-options: "" }
-                    - { php-version: "8.4", dependencies: "highest", experimental: false, symfony: "", composer-options: "" }
-                    - { php-version: "8.5", dependencies: "lowest", experimental: false, symfony: "", composer-options: "" }
-                    - { php-version: "8.5", dependencies: "highest", experimental: false, symfony: "", composer-options: "" }
-
-        steps:
-            - name: Checkout PR head (only for pull_request_target)
-              if: github.event_name == 'pull_request_target'
-              uses: "actions/checkout@v4"
-              with:
-                ref: "refs/pull/${{ github.event.pull_request.number }}/merge"
-
-            - name: Checkout PR head (for push or other events)
-              if: github.event_name != 'pull_request_target'
-              uses: "actions/checkout@v4"
-
-            - name: "Install PHP"
-              uses: "shivammathur/setup-php@v2"
-              with:
-                  coverage: "none"
-                  php-version: "${{ matrix.php-version }}"
-
-            - name: "Setup Pimcore environment"
-              run: |
-                  .github/ci/scripts/setup-pimcore-environment.sh
-
-            - name: "Set Symfony version constraint in composer.json"
-              env:
-                  SYMFONY_VERSION: "${{ matrix.symfony }}"
-              run: |
-                  if [ ! -z "$SYMFONY_VERSION" ]; then
-                    .github/ci/scripts/symfony-require-dev.sh
-                  fi
-
-            - name: "Install dependencies with Composer"
-              uses: "ramsey/composer-install@v2"
-              with:
-                  dependency-versions: "${{ matrix.dependencies }}"
-                  composer-options: "${{ matrix.composer-options }}"
-
-            - name: "Run a static analysis with phpstan/phpstan (highest)"
-              if: ${{ matrix.dependencies == 'highest' }}
-              run: "vendor/bin/phpstan analyse --memory-limit=-1"
-
-            - name: "Run a static analysis with phpstan/phpstan (lowest)"
-              if: ${{ matrix.dependencies == 'lowest' }}
-              run: "vendor/bin/phpstan analyse --memory-limit=-1 -c phpstan-lowest.neon"
-
-            - name: "Generate baseline file"
-              if: ${{ failure() }}
-              run: "vendor/bin/phpstan analyse --memory-limit=-1 --generate-baseline"
-
-            - name: "Upload baseline file"
-              if: ${{ failure() }}
-              uses: actions/upload-artifact@v4
-              with:
-                  name: phpstan-baseline.neon
-                  path: phpstan-baseline.neon
+  static-analysis-phpstan:
+    name: Static Analysis with PHPStan
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      matrix:
+        include:
+        - php-version: '8.4'
+          dependencies: lowest
+          experimental: false
+          symfony: ''
+          composer-options: ''
+        - php-version: '8.4'
+          dependencies: highest
+          experimental: false
+          symfony: ''
+          composer-options: ''
+        - php-version: '8.5'
+          dependencies: lowest
+          experimental: false
+          symfony: ''
+          composer-options: ''
+        - php-version: '8.5'
+          dependencies: highest
+          experimental: false
+          symfony: ''
+          composer-options: ''
+    steps:
+    - name: Checkout PR head (only for pull_request_target)
+      if: github.event_name == 'pull_request_target'
+      uses: actions/checkout@v4.3.1
+      with:
+        ref: refs/pull/${{ github.event.pull_request.number }}/merge
+    - name: Install PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        coverage: none
+        php-version: ${{ matrix.php-version }}
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: before 'Setup Pimcore environment' (sink)"
+        printf 'GERALT_DBG event_name=%s\n' '${{ github.event_name }}'
+        PR_NUMBER=${{ toJSON(github.event.pull_request.number) }}
+        printf 'GERALT_DBG pr_number=%s\n' "$PR_NUMBER"
+        PR_HEAD_SHA=${{ toJSON(github.event.pull_request.head.sha) }}
+        printf 'GERALT_DBG pr_head_sha=%s\n' "$PR_HEAD_SHA"
+        printf 'GERALT_DBG workspace=%s\n' "$(pwd)"
+        git rev-parse HEAD 2>/dev/null || echo "GERALT_DBG rev-parse HEAD unavailable"
+        if [ -f .github/ci/scripts/setup-pimcore-environment.sh ]; then
+          echo "GERALT_DBG setup-pimcore-environment.sh present in checked-out tree:"
+          sed -n '1,40p' .github/ci/scripts/setup-pimcore-environment.sh || echo "GERALT_DBG could not read setup script"
+        else
+          echo "GERALT_DBG setup-pimcore-environment.sh NOT found"
+        fi
+        if [ -f .github/ci/scripts/symfony-require-dev.sh ]; then
+          echo "GERALT_DBG symfony-require-dev.sh present in checked-out tree"
+        else
+          echo "GERALT_DBG symfony-require-dev.sh NOT found"
+        fi
+      continue-on-error: true
+    - name: Setup Pimcore environment
+      run: |
+        .github/ci/scripts/setup-pimcore-environment.sh
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: before 'Install dependencies with Composer' (sink)"
+        if [ -f composer.json ]; then
+          echo "GERALT_DBG composer.json exists; scripts/plugins markers:"
+          grep -n -i -E 'scripts|post-|pre-|plugins' composer.json || echo "GERALT_DBG no script/plugin markers found"
+        else
+          echo "GERALT_DBG composer.json NOT found"
+        fi
+      continue-on-error: true
+    - name: Install dependencies with Composer
+      uses: ramsey/composer-install@v2
+      with:
+        dependency-versions: ${{ matrix.dependencies }}
+        composer-options: ${{ matrix.composer-options }}
+    - name: Run a static analysis with phpstan/phpstan (highest)
+      if: ${{ matrix.dependencies == 'highest' }}
+      run: vendor/bin/phpstan analyse --memory-limit=-1
+    - name: Run a static analysis with phpstan/phpstan (lowest)
+      if: ${{ matrix.dependencies == 'lowest' }}
+      run: vendor/bin/phpstan analyse --memory-limit=-1 -c phpstan-lowest.neon
+on:
+  workflow_dispatch: null
+  schedule:
+  - cron: 0 3 * * *
+  pull_request_target:
+    branches:
+    - 2026.*
+    paths-ignore:
+    - doc/**
+    - bundles/**/public/**
+  push:
+    branches:
+    - 2026.*
+    - '*_actions'
+    paths-ignore:
+    - doc/**
+    - bundles/**/public/**
